@@ -19,6 +19,7 @@ package com.netflix.spinnaker.fiat.permissions;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.util.ArrayIterator;
+import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.collect.ArrayTable;
@@ -95,6 +96,9 @@ public class RedisPermissionsRepository implements PermissionsRepository {
       Caffeine.newBuilder()
           .expireAfterAccess(Duration.ofSeconds(10))
           .build(k -> reloadUnrestricted(k));
+
+  private final Cache<ResourceType, Cache<String, Resource>> resourceCache =
+      Caffeine.newBuilder().build();
 
   private final String prefix;
 
@@ -219,9 +223,7 @@ public class RedisPermissionsRepository implements PermissionsRepository {
                     .hgetAll(userKey(permission.getId(), ResourceType.ROLE))
                     .values()
                     .stream()
-                    .map(
-                        (ThrowingFunction<String, Role>)
-                            serialized -> objectMapper.readValue(serialized, Role.class))
+                    .map(serialized -> (Role) readResource(ResourceType.ROLE, serialized))
                     .collect(Collectors.toSet());
               });
 
@@ -521,17 +523,25 @@ public class RedisPermissionsRepository implements PermissionsRepository {
     return lastModifiedKey(UNRESTRICTED);
   }
 
-  private Set<Resource> extractResources(ResourceType r, Map<String, String> resourceMap) {
+  private Resource readResource(ResourceType resourceType, String content) {
+    Cache<String, Resource> cache =
+        resourceCache.get(resourceType, k -> Caffeine.newBuilder().weakValues().build());
+
     val modelClazz =
         resources.stream()
-            .filter(resource -> resource.getResourceType().equals(r))
+            .filter(resource -> resource.getResourceType().equals(resourceType))
             .findFirst()
             .orElseThrow(IllegalArgumentException::new)
             .getClass();
+
+    return cache.get(
+        content,
+        (ThrowingFunction<String, ? extends Resource>) k -> objectMapper.readValue(k, modelClazz));
+  }
+
+  private Set<Resource> extractResources(ResourceType r, Map<String, String> resourceMap) {
     return resourceMap.values().stream()
-        .map(
-            (ThrowingFunction<String, ? extends Resource>)
-                serialized -> objectMapper.readValue(serialized, modelClazz))
+        .map(serialized -> readResource(r, serialized))
         .collect(Collectors.toSet());
   }
 
