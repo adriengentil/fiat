@@ -259,7 +259,7 @@ public class UserRolesSyncer {
             "syncUsers",
             () -> {
               Collection<UserPermission> values = permissionsResolver.resolve(extUsers).values();
-              values.forEach(permissionsRepository::put);
+              values.parallelStream().forEach(permissionsRepository::put);
               return values.size();
             });
     log.info("Synced {} non-anonymous user roles.", count);
